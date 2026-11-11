@@ -1,10 +1,11 @@
 import os
 import sys
 import math
+import json
 import array
 import random
 from enum import Enum
-from typing import List, Tuple, Optional, Dict, Callable
+from typing import List, Tuple, Optional, Dict, Callable, Any
 
 import pygame
 import pygame.gfxdraw
@@ -15,8 +16,19 @@ SCREEN_HEIGHT = 768
 FPS = 60
 TITLE = "Fruit Memory Deluxe - Studio Edition"
 
-MISMATCH_DELAY_MS = 800
+MISMATCH_DELAY_MS = 780
 HINT_PEEK_MS = 1050
+LEADERBOARD_FILE = "fruit_memory_leaderboard.json"
+
+GRID_TIME_LIMITS = {
+    4: 60.0,
+    6: 150.0,
+    8: 300.0,
+    10: 540.0,
+}
+
+MATCH_TIME_BONUS = 4.0
+MISMATCH_TIME_PENALTY = 2.0
 
 PALETTE = {
     "sky_zenith": (28, 128, 228),
@@ -40,6 +52,12 @@ PALETTE = {
     "gold_mid": (244, 192, 38),
     "gold_light": (255, 238, 118),
     "gold_shine": (255, 252, 216),
+    "silver_dark": (115, 126, 138),
+    "silver_mid": (188, 198, 212),
+    "silver_light": (238, 244, 255),
+    "bronze_dark": (128, 68, 28),
+    "bronze_mid": (198, 118, 58),
+    "bronze_light": (244, 178, 118),
     "jade_deep": (12, 58, 48),
     "jade_dark": (20, 92, 74),
     "jade_mid": (34, 138, 106),
@@ -53,6 +71,9 @@ PALETTE = {
     "leaf_mid": (46, 148, 62),
     "leaf_light": (108, 212, 92),
     "white": (255, 255, 255),
+    "danger_red": (238, 42, 56),
+    "safe_green": (52, 214, 88),
+    "warn_yellow": (252, 194, 34),
 }
 
 BASE_FRUITS = [
@@ -113,9 +134,12 @@ FRUIT_THEME_COLORS = {
 
 
 class GameState(Enum):
+    NAME_INPUT = 0
     MENU = 1
     PLAYING = 2
     VICTORY = 3
+    GAME_OVER = 4
+    SCOREBOARD = 5
 
 
 def clamp(val: float, lo: float, hi: float) -> float:
@@ -306,6 +330,8 @@ def render_arcade_text(
     outline_px: int = 3,
     drop_shadow: int = 3,
 ) -> pygame.Surface:
+    if not text:
+        text = " "
     base_mask = font.render(text, True, (255, 255, 255))
     tw, th = base_mask.get_size()
 
@@ -425,13 +451,16 @@ class SoundManager:
         self.sounds["flip"] = self._generate_tone(320, 740, 0.08, 0.22, "rich")
         self.sounds["deal"] = self._generate_tone(250, 490, 0.045, 0.12, "sine")
         self.sounds["click"] = self._generate_tone(580, 920, 0.06, 0.24, "triangle")
+        self.sounds["type"] = self._generate_tone(480, 680, 0.035, 0.16, "triangle")
+        self.sounds["tick"] = self._generate_tone(880, 440, 0.05, 0.18, "sine")
         self.sounds["hint"] = self._generate_arpeggio([659.25, 880.0, 1174.66, 1567.98], 0.075, 0.26)
-        self.sounds["mismatch"] = self._generate_arpeggio([285, 220], 0.13, 0.24)
+        self.sounds["mismatch"] = self._generate_arpeggio([285, 210], 0.13, 0.25)
         self.sounds["match"] = self._generate_arpeggio([523.25, 659.25, 783.99, 1046.50], 0.085, 0.26)
         self.sounds["combo"] = self._generate_arpeggio([587.33, 783.99, 987.77, 1174.66, 1567.98], 0.08, 0.28)
         self.sounds["victory"] = self._generate_arpeggio(
             [523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98], 0.13, 0.28
         )
+        self.sounds["gameover"] = self._generate_arpeggio([392.0, 349.23, 311.13, 261.63], 0.16, 0.28)
         self.sounds["star"] = self._generate_tone(660, 1480, 0.18, 0.26, "rich")
 
     def play(self, name: str):
@@ -443,6 +472,78 @@ class SoundManager:
         if self.enabled:
             self.play("click")
         return self.enabled
+
+
+class LeaderboardManager:
+    def __init__(self, filepath: str = LEADERBOARD_FILE):
+        self.filepath = filepath
+        self.data: Dict[str, List[Dict[str, Any]]] = {
+            "4x4": [],
+            "6x6": [],
+            "8x8": [],
+            "10x10": [],
+        }
+        self.load()
+
+    def load(self):
+        if os.path.isfile(self.filepath):
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    for k in self.data.keys():
+                        if k in loaded and isinstance(loaded[k], list):
+                            self.data[k] = loaded[k]
+                    return
+            except Exception:
+                pass
+        self._seed_defaults()
+        self.save()
+
+    def _seed_defaults(self):
+        self.data = {
+            "4x4": [
+                {"name": "ARIA", "score": 2150, "time": 18.4, "moves": 10},
+                {"name": "LEO", "score": 1780, "time": 24.2, "moves": 13},
+                {"name": "NOVA", "score": 1420, "time": 31.0, "moves": 16},
+            ],
+            "6x6": [
+                {"name": "KAI", "score": 5400, "time": 52.5, "moves": 28},
+                {"name": "MILA", "score": 4620, "time": 68.1, "moves": 34},
+            ],
+            "8x8": [
+                {"name": "ZANE", "score": 10800, "time": 124.0, "moves": 58},
+            ],
+            "10x10": [
+                {"name": "ORION", "score": 18500, "time": 240.5, "moves": 96},
+            ],
+        }
+
+    def save(self):
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=2)
+        except Exception:
+            pass
+
+    def add_record(self, player_name: str, grid_dim: int, score: int, clear_time: float, moves: int):
+        key = f"{grid_dim}x{grid_dim}"
+        if key not in self.data:
+            self.data[key] = []
+        clean_name = (player_name.strip() or "PLAYER")[:12].upper()
+        entry = {
+            "name": clean_name,
+            "score": int(score),
+            "time": round(float(clear_time), 1),
+            "moves": int(moves),
+        }
+        self.data[key].append(entry)
+        self.data[key].sort(key=lambda item: (-item.get("score", 0), item.get("time", 9999.0), item.get("moves", 9999)))
+        self.data[key] = self.data[key][:8]
+        self.save()
+
+    def get_records(self, grid_dim: int) -> List[Dict[str, Any]]:
+        return self.data.get(f"{grid_dim}x{grid_dim}", [])
 
 
 class AssetGenerator:
@@ -1035,7 +1136,7 @@ class AssetGenerator:
         gap_x: int,
         gap_y: int,
     ) -> pygame.Surface:
-        pad = 24
+        pad = 22
         fw, fh = grid_w + pad * 2, grid_h + pad * 2
         surf = pygame.Surface((fw + 24, fh + 24), pygame.SRCALPHA)
         ox, oy = 12, 10
@@ -1169,6 +1270,11 @@ class GraphicalButton:
             self.icon_type = new_icon
             self._rebuild_surfaces()
 
+    def set_text(self, new_text: str):
+        if self.text != new_text:
+            self.text = new_text
+            self._rebuild_surfaces()
+
     def set_badge(self, badge: str):
         if self.badge_text != badge:
             self.badge_text = badge
@@ -1260,11 +1366,11 @@ class GraphicalButton:
         cy = pad + (h - self.lip_h) // 2
 
         if self.icon_type and self.text:
-            icon_x = pad + 30
+            icon_x = pad + 28
             self._draw_icon(face_down, self.icon_type, (icon_x, cy))
             if self.font:
                 txt = render_arcade_text(self.font, self.text, (255, 255, 255), (255, 236, 175), (38, 18, 6), 2, 2)
-                face_down.blit(txt, txt.get_rect(center=(cx + 14, cy)))
+                face_down.blit(txt, txt.get_rect(center=(cx + 12, cy)))
         elif self.icon_type:
             self._draw_icon(face_down, self.icon_type, (cx, cy))
         elif self.text and self.font:
@@ -1314,6 +1420,23 @@ class GraphicalButton:
             draw_aa_circle(surf, (255, 245, 130), (cx, cy - 2), 8)
             draw_aa_circle(surf, white, (cx - 2, cy - 4), 5)
             pygame.draw.rect(surf, (220, 220, 230), (cx - 4, cy + 5, 8, 5), border_radius=2)
+
+        elif icon_type == "trophy":
+            cup_sh = [(cx - 9, cy - 8), (cx + 9, cy - 8), (cx + 6, cy + 3), (cx - 6, cy + 3)]
+            cup_pts = [(cx - 9, cy - 10), (cx + 9, cy - 10), (cx + 6, cy + 1), (cx - 6, cy + 1)]
+            draw_aa_polygon(surf, shadow_col, cup_sh)
+            draw_aa_polygon(surf, PALETTE["gold_light"], cup_pts)
+            pygame.draw.rect(surf, PALETTE["gold_mid"], (cx - 3, cy + 1, 6, 6))
+            pygame.draw.rect(surf, white, (cx - 8, cy + 6, 16, 4), border_radius=2)
+            pygame.draw.arc(surf, white, (cx - 13, cy - 9, 8, 9), 1.5, 4.7, 2)
+            pygame.draw.arc(surf, white, (cx + 5, cy - 9, 8, 9), -1.5, 1.5, 2)
+
+        elif icon_type == "user":
+            draw_aa_circle(surf, shadow_col, (cx, cy - 3), 6)
+            draw_aa_circle(surf, white, (cx, cy - 5), 6)
+            arc_pts = [(cx - 10, cy + 9), (cx - 7, cy + 2), (cx + 7, cy + 2), (cx + 10, cy + 9)]
+            draw_aa_polygon(surf, shadow_col, [(x, y + 2) for x, y in arc_pts])
+            draw_aa_polygon(surf, white, arc_pts)
 
         elif icon_type in ("sound_on", "sound_off"):
             spk = [
@@ -2198,7 +2321,9 @@ class Card:
             scaled_h,
         )
         pygame.draw.rect(screen, PALETTE["gold_shadow"], edge_rect, border_radius=edge_rad)
-        pygame.draw.rect(screen, PALETTE["gold_mid"], edge_rect.inflate(-2, -2), width=max(1, int(2 * size_ratio)), border_radius=edge_rad)
+        pygame.draw.rect(
+            screen, PALETTE["gold_mid"], edge_rect.inflate(-2, -2), width=max(1, int(2 * size_ratio)), border_radius=edge_rad
+        )
 
         active_surf = self.front_surf if flip_val >= 0.5 else self.back_surf
         if scaled_w == self.card_w and scaled_h == self.card_h:
@@ -2249,15 +2374,18 @@ class FruitMemoryDeluxeGame:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        self.font_title = pygame.font.SysFont("trebuchetms,arialroundedmtbold,verdana", 52, bold=True)
+        self.font_title = pygame.font.SysFont("trebuchetms,arialroundedmtbold,verdana", 50, bold=True)
         self.font_subtitle = pygame.font.SysFont("trebuchetms,verdana,arial", 21, bold=True)
         self.font_hud_label = pygame.font.SysFont("trebuchetms,verdana,arial", 13, bold=True)
-        self.font_hud_value = pygame.font.SysFont("trebuchetms,verdana,arial", 23, bold=True)
-        self.font_button = pygame.font.SysFont("trebuchetms,verdana,arial", 22, bold=True)
-        self.font_grid_btn = pygame.font.SysFont("trebuchetms,verdana,arial", 20, bold=True)
-        self.font_popup = pygame.font.SysFont("trebuchetms,verdana,arial", 25, bold=True)
+        self.font_hud_value = pygame.font.SysFont("trebuchetms,verdana,arial", 22, bold=True)
+        self.font_button = pygame.font.SysFont("trebuchetms,verdana,arial", 21, bold=True)
+        self.font_grid_btn = pygame.font.SysFont("trebuchetms,verdana,arial", 19, bold=True)
+        self.font_popup = pygame.font.SysFont("trebuchetms,verdana,arial", 24, bold=True)
+        self.font_input = pygame.font.SysFont("trebuchetms,verdana,arial", 30, bold=True)
+        self.font_table = pygame.font.SysFont("trebuchetms,verdana,arial", 18, bold=True)
 
         self.sound_mgr = SoundManager()
+        self.leaderboard = LeaderboardManager()
         self.background = AnimatedBackground(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.particles = ParticleSystem()
 
@@ -2270,9 +2398,11 @@ class FruitMemoryDeluxeGame:
         for ft in BASE_FRUITS[:8]:
             self.master_card_fronts[ft] = AssetGenerator.create_master_card_front(ft)
 
-        self.hud_banner_surf = AssetGenerator.create_wooden_banner(610, 82)
-        self.victory_panel_surf = AssetGenerator.create_wooden_banner(540, 445)
-        self.menu_plaque_surf = AssetGenerator.create_wooden_banner(650, 150)
+        self.hud_banner_surf = AssetGenerator.create_wooden_banner(610, 86)
+        self.modal_panel_surf = AssetGenerator.create_wooden_banner(560, 460)
+        self.scoreboard_panel_surf = AssetGenerator.create_wooden_banner(720, 560)
+        self.name_panel_surf = AssetGenerator.create_wooden_banner(580, 390)
+        self.menu_plaque_surf = AssetGenerator.create_wooden_banner(650, 142)
 
         self.star_earned_surf = AssetGenerator.create_star_sprite(36, earned=True)
         self.star_empty_surf = AssetGenerator.create_star_sprite(36, earned=False)
@@ -2281,7 +2411,7 @@ class FruitMemoryDeluxeGame:
             self.font_hud_label, "MOVES", PALETTE["gold_shine"], PALETTE["gold_mid"], (45, 18, 6), 2, 1
         )
         self.lbl_time = render_arcade_text(
-            self.font_hud_label, "TIME", PALETTE["gold_shine"], PALETTE["gold_mid"], (45, 18, 6), 2, 1
+            self.font_hud_label, "TIME LEFT", PALETTE["gold_shine"], PALETTE["gold_mid"], (45, 18, 6), 2, 1
         )
         self.lbl_score = render_arcade_text(
             self.font_hud_label, "SCORE", PALETTE["gold_shine"], PALETTE["gold_mid"], (45, 18, 6), 2, 1
@@ -2292,12 +2422,16 @@ class FruitMemoryDeluxeGame:
 
         self.menu_showcase_fruits = ["Strawberry", "Pineapple", "Watermelon", "Mango"]
         self.menu_showcase_surfs = [
-            self._get_scaled_card_surface(ft, 112, 136) for ft in self.menu_showcase_fruits
+            self._get_scaled_card_surface(ft, 108, 132) for ft in self.menu_showcase_fruits
         ]
-        self.menu_showcase_shadow = self._get_scaled_shadow(112, 136)
+        self.menu_showcase_shadow = self._get_scaled_shadow(108, 132)
 
-        self.state = GameState.MENU
+        self.state = GameState.NAME_INPUT
+        self.player_name = "PLAYER 1"
+        self.name_input_box_shake = 0.0
+
         self.grid_dim = 4
+        self.scoreboard_filter_dim = 4
         self.total_pairs = 8
 
         self.cards: List[Card] = []
@@ -2313,10 +2447,14 @@ class FruitMemoryDeluxeGame:
         self.score = 0
         self.displayed_score = 0.0
         self.combo = 0
-        self.fever_meter = 0.0
         self.matched_pairs = 0
+
+        self.max_time = GRID_TIME_LIMITS[4]
+        self.remaining_time = self.max_time
         self.elapsed_seconds = 0.0
         self.timer_active = False
+        self.time_bar_shake = 0.0
+        self.last_low_time_tick = 0
 
         self.board_frame_surf: Optional[pygame.Surface] = None
         self.board_center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 40)
@@ -2330,8 +2468,8 @@ class FruitMemoryDeluxeGame:
         self.pending_transition_action: Optional[Callable[[], None]] = None
         self.iris_mask = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
 
-        self.victory_timer = 0.0
-        self.victory_panel_spring = Spring(0.0, stiffness=240.0, damping=16.0)
+        self.overlay_timer = 0.0
+        self.modal_spring = Spring(0.0, stiffness=240.0, damping=16.0)
         self.star_springs = [
             Spring(0.0, stiffness=280.0, damping=14.0),
             Spring(0.0, stiffness=280.0, damping=14.0),
@@ -2368,8 +2506,8 @@ class FruitMemoryDeluxeGame:
 
     def _compute_grid_metrics(self, dim: int) -> Tuple[int, int, int, int, int, int]:
         top_margin = 122
-        bottom_margin = 24
-        side_margin = 56
+        bottom_margin = 22
+        side_margin = 54
         avail_w = SCREEN_WIDTH - side_margin * 2
         avail_h = SCREEN_HEIGHT - top_margin - bottom_margin
 
@@ -2397,6 +2535,16 @@ class FruitMemoryDeluxeGame:
         return card_w, card_h, gap_x, gap_y, grid_w, grid_h
 
     def _init_buttons(self):
+        self.name_continue_btn = GraphicalButton(
+            center=(SCREEN_WIDTH // 2, 505),
+            size=(250, 64),
+            text="CONTINUE",
+            icon_type="play",
+            theme="green_gem",
+            callback=self._confirm_player_name,
+            font=self.font_button,
+        )
+
         self.grid_selector_buttons: List[GraphicalButton] = []
         selector_w = 108
         selector_gap = 18
@@ -2407,8 +2555,8 @@ class FruitMemoryDeluxeGame:
             bx = start_sel_x + idx * (selector_w + selector_gap)
             selected = dim == self.grid_dim
             btn = GraphicalButton(
-                center=(bx, 456),
-                size=(selector_w, 52),
+                center=(bx, 442),
+                size=(selector_w, 50),
                 text=f"{dim}x{dim}",
                 theme="gold_gem" if selected else "teal_gem",
                 callback=lambda d=dim: self.select_grid_size(d),
@@ -2417,10 +2565,20 @@ class FruitMemoryDeluxeGame:
             )
             self.grid_selector_buttons.append(btn)
 
+        self.edit_player_btn = GraphicalButton(
+            center=(SCREEN_WIDTH - 135, 44),
+            size=(215, 48),
+            text="PLAYER 1",
+            icon_type="user",
+            theme="wood_plaque",
+            callback=lambda: self.start_iris_transition(self._enter_name_input_state),
+            font=self.font_grid_btn,
+        )
+
         self.menu_buttons = [
             GraphicalButton(
-                center=(SCREEN_WIDTH // 2, 548),
-                size=(260, 68),
+                center=(SCREEN_WIDTH // 2, 528),
+                size=(268, 66),
                 text="PLAY GAME",
                 icon_type="play",
                 theme="green_gem",
@@ -2428,21 +2586,31 @@ class FruitMemoryDeluxeGame:
                 font=self.font_button,
             ),
             GraphicalButton(
-                center=(SCREEN_WIDTH // 2 - 74, 636),
-                size=(116, 56),
+                center=(SCREEN_WIDTH // 2 - 142, 616),
+                size=(188, 56),
+                text="RANKINGS",
+                icon_type="trophy",
+                theme="gold_gem",
+                callback=lambda: self.start_iris_transition(lambda: self._enter_scoreboard_state(self.grid_dim)),
+                font=self.font_grid_btn,
+            ),
+            GraphicalButton(
+                center=(SCREEN_WIDTH // 2 + 24, 616),
+                size=(98, 56),
                 icon_type="sound_on",
                 theme="blue_gem",
                 callback=self.toggle_sound,
                 font=self.font_button,
             ),
             GraphicalButton(
-                center=(SCREEN_WIDTH // 2 + 74, 636),
-                size=(116, 56),
+                center=(SCREEN_WIDTH // 2 + 142, 616),
+                size=(98, 56),
                 icon_type="quit",
                 theme="red_gem",
                 callback=self.quit_game,
                 font=self.font_button,
             ),
+            self.edit_player_btn,
         ]
 
         self.hint_button = GraphicalButton(
@@ -2481,17 +2649,44 @@ class FruitMemoryDeluxeGame:
 
         self.victory_buttons = [
             GraphicalButton(
-                center=(SCREEN_WIDTH // 2 - 122, 540),
-                size=(218, 62),
+                center=(SCREEN_WIDTH // 2 - 165, 552),
+                size=(162, 58),
                 text="PLAY AGAIN",
+                theme="green_gem",
+                callback=lambda: self.start_iris_transition(self._setup_new_game),
+                font=self.font_grid_btn,
+            ),
+            GraphicalButton(
+                center=(SCREEN_WIDTH // 2, 552),
+                size=(152, 58),
+                text="RANKINGS",
+                theme="gold_gem",
+                callback=lambda: self.start_iris_transition(lambda: self._enter_scoreboard_state(self.grid_dim)),
+                font=self.font_grid_btn,
+            ),
+            GraphicalButton(
+                center=(SCREEN_WIDTH // 2 + 165, 552),
+                size=(162, 58),
+                text="MAIN MENU",
+                theme="orange_gem",
+                callback=lambda: self.start_iris_transition(self._enter_menu_state),
+                font=self.font_grid_btn,
+            ),
+        ]
+
+        self.gameover_buttons = [
+            GraphicalButton(
+                center=(SCREEN_WIDTH // 2 - 122, 520),
+                size=(215, 62),
+                text="TRY AGAIN",
                 icon_type="restart",
                 theme="green_gem",
                 callback=lambda: self.start_iris_transition(self._setup_new_game),
                 font=self.font_button,
             ),
             GraphicalButton(
-                center=(SCREEN_WIDTH // 2 + 122, 540),
-                size=(218, 62),
+                center=(SCREEN_WIDTH // 2 + 122, 520),
+                size=(215, 62),
                 text="MAIN MENU",
                 icon_type="menu",
                 theme="orange_gem",
@@ -2499,6 +2694,60 @@ class FruitMemoryDeluxeGame:
                 font=self.font_button,
             ),
         ]
+
+        self.scoreboard_tab_buttons: List[GraphicalButton] = []
+        tab_w = 116
+        tab_gap = 16
+        total_tab_w = len(self.GRID_OPTIONS) * tab_w + (len(self.GRID_OPTIONS) - 1) * tab_gap
+        start_tab_x = SCREEN_WIDTH // 2 - total_tab_w // 2 + tab_w // 2
+        for idx, dim in enumerate(self.GRID_OPTIONS):
+            tx = start_tab_x + idx * (tab_w + tab_gap)
+            sel = dim == self.scoreboard_filter_dim
+            tbtn = GraphicalButton(
+                center=(tx, 206),
+                size=(tab_w, 48),
+                text=f"{dim}x{dim}",
+                theme="gold_gem" if sel else "teal_gem",
+                callback=lambda d=dim: self.select_scoreboard_tab(d),
+                font=self.font_grid_btn,
+                is_selected=sel,
+            )
+            self.scoreboard_tab_buttons.append(tbtn)
+
+        self.scoreboard_back_btn = GraphicalButton(
+            center=(SCREEN_WIDTH // 2, 622),
+            size=(220, 58),
+            text="BACK TO MENU",
+            icon_type="menu",
+            theme="orange_gem",
+            callback=lambda: self.start_iris_transition(self._enter_menu_state),
+            font=self.font_grid_btn,
+        )
+
+    def _confirm_player_name(self):
+        cleaned = self.player_name.strip().upper()
+        if not cleaned:
+            self.name_input_box_shake = 0.4
+            self.sound_mgr.play("mismatch")
+            return
+        self.player_name = cleaned[:12]
+        self.edit_player_btn.set_text(self.player_name)
+        self.start_iris_transition(self._enter_menu_state)
+
+    def _enter_name_input_state(self):
+        self.state = GameState.NAME_INPUT
+        self.particles.clear()
+
+    def _enter_scoreboard_state(self, filter_dim: int = 4):
+        self.state = GameState.SCOREBOARD
+        self.particles.clear()
+        self.select_scoreboard_tab(filter_dim)
+
+    def select_scoreboard_tab(self, dim: int):
+        self.scoreboard_filter_dim = dim
+        for idx, d in enumerate(self.GRID_OPTIONS):
+            is_sel = d == dim
+            self.scoreboard_tab_buttons[idx].set_selected(is_sel, "gold_gem" if is_sel else "teal_gem")
 
     def select_grid_size(self, dim: int):
         self.grid_dim = dim
@@ -2515,7 +2764,7 @@ class FruitMemoryDeluxeGame:
     def toggle_sound(self):
         enabled = self.sound_mgr.toggle()
         icon = "sound_on" if enabled else "sound_off"
-        self.menu_buttons[1].set_icon(icon)
+        self.menu_buttons[2].set_icon(icon)
         self.hud_buttons[3].set_icon(icon)
 
     def quit_game(self):
@@ -2523,6 +2772,7 @@ class FruitMemoryDeluxeGame:
 
     def _enter_menu_state(self):
         self.state = GameState.MENU
+        self.edit_player_btn.set_text(self.player_name)
         self.particles.clear()
 
     def _build_deck_keys(self, num_pairs: int) -> List[str]:
@@ -2558,13 +2808,17 @@ class FruitMemoryDeluxeGame:
         self.score = 0
         self.displayed_score = 0.0
         self.combo = 0
-        self.fever_meter = 0.0
         self.matched_pairs = 0
+
+        self.max_time = GRID_TIME_LIMITS.get(dim, 120.0)
+        self.remaining_time = self.max_time
         self.elapsed_seconds = 0.0
         self.timer_active = False
+        self.time_bar_shake = 0.0
+        self.last_low_time_tick = 0
 
         card_w, card_h, gap_x, gap_y, grid_w, grid_h = self._compute_grid_metrics(dim)
-        top_area = 118
+        top_area = 120
         avail_h = SCREEN_HEIGHT - top_area - 16
         board_cy = top_area + avail_h // 2
         self.board_center = (SCREEN_WIDTH // 2, board_cy)
@@ -2655,10 +2909,13 @@ class FruitMemoryDeluxeGame:
     def trigger_victory(self):
         self.state = GameState.VICTORY
         self.timer_active = False
-        self.victory_timer = 0.0
-        self.victory_panel_spring.snap(0.1)
-        self.victory_panel_spring.set_target(1.0)
-        self.victory_panel_spring.impulse(2.0)
+        self.overlay_timer = 0.0
+        self.modal_spring.snap(0.1)
+        self.modal_spring.set_target(1.0)
+        self.modal_spring.impulse(2.0)
+
+        time_bonus = int(round(self.remaining_time * 15))
+        self.score += time_bonus
 
         for sp in self.star_springs:
             sp.snap(0.0)
@@ -2673,7 +2930,25 @@ class FruitMemoryDeluxeGame:
         else:
             self.earned_stars = 1
 
+        self.leaderboard.add_record(
+            self.player_name,
+            self.grid_dim,
+            self.score,
+            self.elapsed_seconds,
+            self.moves,
+        )
         self.sound_mgr.play("victory")
+
+    def trigger_game_over(self):
+        self.state = GameState.GAME_OVER
+        self.timer_active = False
+        self.remaining_time = 0.0
+        self.overlay_timer = 0.0
+        self.modal_spring.snap(0.1)
+        self.modal_spring.set_target(1.0)
+        self.modal_spring.impulse(1.8)
+        self.camera_trauma = 0.55
+        self.sound_mgr.play("gameover")
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -2681,15 +2956,31 @@ class FruitMemoryDeluxeGame:
                 self.running = False
                 return
 
+            if self.iris_closing or self.iris_radius < self.iris_max_radius * 0.65:
+                continue
+
+            if self.state == GameState.NAME_INPUT:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN:
+                        self._confirm_player_name()
+                    elif event.key == pygame.K_BACKSPACE:
+                        if len(self.player_name) > 0:
+                            self.player_name = self.player_name[:-1]
+                            self.sound_mgr.play("type")
+                    else:
+                        ch = event.unicode
+                        if ch and (ch.isalnum() or ch in (" ", "_", "-")) and len(self.player_name) < 12:
+                            self.player_name += ch.upper()
+                            self.sound_mgr.play("type")
+                self.name_continue_btn.handle_event(event, self.sound_mgr)
+                continue
+
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                if self.state in (GameState.PLAYING, GameState.VICTORY):
+                if self.state in (GameState.PLAYING, GameState.VICTORY, GameState.GAME_OVER, GameState.SCOREBOARD):
                     self.start_iris_transition(self._enter_menu_state)
                 else:
                     self.running = False
                 return
-
-            if self.iris_closing or self.iris_radius < self.iris_max_radius * 0.65:
-                continue
 
             if self.state == GameState.MENU:
                 handled = False
@@ -2716,6 +3007,20 @@ class FruitMemoryDeluxeGame:
                 for btn in self.victory_buttons:
                     if btn.handle_event(event, self.sound_mgr):
                         break
+
+            elif self.state == GameState.GAME_OVER:
+                for btn in self.gameover_buttons:
+                    if btn.handle_event(event, self.sound_mgr):
+                        break
+
+            elif self.state == GameState.SCOREBOARD:
+                handled = False
+                for btn in self.scoreboard_tab_buttons:
+                    if btn.handle_event(event, self.sound_mgr):
+                        handled = True
+                        break
+                if not handled:
+                    self.scoreboard_back_btn.handle_event(event, self.sound_mgr)
 
     def _handle_card_click(self, mouse_pos: Tuple[int, int]):
         if self.is_checking or self.is_hint_peeking or len(self.selected_cards) >= 2:
@@ -2744,13 +3049,13 @@ class FruitMemoryDeluxeGame:
             c2.set_matched()
             self.matched_pairs += 1
             self.combo += 1
-            self.fever_meter = min(1.0, self.fever_meter + 0.34)
 
-            fever_bonus = 2 if self.fever_meter >= 0.95 else 1
-            points_gained = 100 * self.combo * fever_bonus
+            points_gained = 100 * self.combo
             self.score += points_gained
 
-            self.camera_trauma = min(1.0, 0.25 + self.combo * 0.12)
+            self.remaining_time = min(self.max_time, self.remaining_time + MATCH_TIME_BONUS)
+
+            self.camera_trauma = min(1.0, 0.22 + self.combo * 0.10)
             if self.combo >= 2:
                 self.hit_stop_timer = 0.035
 
@@ -2762,12 +3067,12 @@ class FruitMemoryDeluxeGame:
             mid_x = (c1.target_center[0] + c2.target_center[0]) / 2.0
             mid_y = (c1.target_center[1] + c2.target_center[1]) / 2.0
             if self.combo > 1:
-                label = f"+{points_gained}  {self.combo}x FEVER!"
-                top_c, bot_c = (255, 255, 190), (255, 130, 20)
+                label = f"+{points_gained} ({self.combo}x)  +{int(MATCH_TIME_BONUS)}s"
+                top_c, bot_c = (195, 255, 210), (45, 215, 95)
                 self.sound_mgr.play("combo")
             else:
-                label = f"+{points_gained}"
-                top_c, bot_c = PALETTE["gold_shine"], PALETTE["gold_mid"]
+                label = f"+{points_gained}  +{int(MATCH_TIME_BONUS)}s"
+                top_c, bot_c = (210, 255, 215), (65, 225, 105)
                 self.sound_mgr.play("match")
 
             self.particles.add_popup(mid_x, mid_y - 16, label, self.font_popup, top_c, bot_c)
@@ -2779,12 +3084,24 @@ class FruitMemoryDeluxeGame:
                 self.trigger_victory()
         else:
             self.combo = 0
-            self.fever_meter = max(0.0, self.fever_meter - 0.35)
-            self.camera_trauma = 0.18
+            self.remaining_time = max(0.0, self.remaining_time - MISMATCH_TIME_PENALTY)
+            self.time_bar_shake = 0.42
+            self.camera_trauma = 0.22
             self.mismatch_timer_start = pygame.time.get_ticks()
             c1.trigger_mismatch_shake()
             c2.trigger_mismatch_shake()
             self.sound_mgr.play("mismatch")
+
+            mid_x = (c1.target_center[0] + c2.target_center[0]) / 2.0
+            mid_y = (c1.target_center[1] + c2.target_center[1]) / 2.0
+            self.particles.add_popup(
+                mid_x, mid_y - 12, f"-{int(MISMATCH_TIME_PENALTY)}s", self.font_popup, (255, 175, 175), (235, 38, 52)
+            )
+
+            if self.remaining_time <= 0.0:
+                self.selected_cards.clear()
+                self.is_checking = False
+                self.trigger_game_over()
 
     def update(self, dt: float):
         if self.iris_closing:
@@ -2807,8 +3124,15 @@ class FruitMemoryDeluxeGame:
 
         self.camera_trauma = max(0.0, self.camera_trauma - 2.2 * dt)
         self.displayed_score += (self.score - self.displayed_score) * min(1.0, dt * 14.0)
+        if self.name_input_box_shake > 0.0:
+            self.name_input_box_shake = max(0.0, self.name_input_box_shake - dt)
+        if self.time_bar_shake > 0.0:
+            self.time_bar_shake = max(0.0, self.time_bar_shake - dt)
 
-        if self.state == GameState.MENU:
+        if self.state == GameState.NAME_INPUT:
+            self.name_continue_btn.update(dt, mouse_pos)
+
+        elif self.state == GameState.MENU:
             for btn in self.grid_selector_buttons:
                 btn.update(dt, mouse_pos)
             for btn in self.menu_buttons:
@@ -2820,10 +3144,18 @@ class FruitMemoryDeluxeGame:
 
             if self.timer_active:
                 self.elapsed_seconds += dt
-                self.fever_meter = max(0.0, self.fever_meter - 0.032 * dt)
-                if self.fever_meter > 0.65 and random.random() < 0.35:
-                    fx = SCREEN_WIDTH // 2 + random.uniform(-110, 110)
-                    self.particles.emit_trail_sparkle(fx, 80, (255, 165, 35))
+                self.remaining_time = max(0.0, self.remaining_time - dt)
+
+                ratio = self.remaining_time / max(1.0, self.max_time)
+                if ratio < 0.25 and self.remaining_time > 0.0:
+                    sec_int = int(math.ceil(self.remaining_time))
+                    if sec_int != self.last_low_time_tick:
+                        self.last_low_time_tick = sec_int
+                        self.sound_mgr.play("tick")
+
+                if self.remaining_time <= 0.0:
+                    self.trigger_game_over()
+                    return
 
             now = pygame.time.get_ticks()
             if self.is_hint_peeking and now - self.hint_timer_start >= HINT_PEEK_MS:
@@ -2858,30 +3190,46 @@ class FruitMemoryDeluxeGame:
             for btn in self.victory_buttons:
                 btn.update(dt, mouse_pos)
 
-            self.victory_timer += dt
-            self.victory_panel_spring.update(dt)
+            self.overlay_timer += dt
+            self.modal_spring.update(dt)
 
             if random.random() < 0.48:
                 self.particles.emit_confetti_rain()
 
             for i in range(self.earned_stars):
                 star_trigger_t = 0.32 + i * 0.30
-                if self.victory_timer >= star_trigger_t and not self.stars_triggered[i]:
+                if self.overlay_timer >= star_trigger_t and not self.stars_triggered[i]:
                     self.stars_triggered[i] = True
                     self.star_springs[i].set_target(1.0)
                     self.star_springs[i].impulse(3.2)
                     self.sound_mgr.play("star")
                     sx = SCREEN_WIDTH // 2 + (i - 1) * 102
-                    sy = SCREEN_HEIGHT // 2 - 74 + (0 if i == 1 else 14)
+                    sy = SCREEN_HEIGHT // 2 - 78 + (0 if i == 1 else 14)
                     self.particles.emit_match_burst((sx, sy), PALETTE["gold_light"])
 
             for sp in self.star_springs:
                 sp.update(dt)
 
+        elif self.state == GameState.GAME_OVER:
+            for card in self.cards:
+                card.update(dt, mouse_pos, False, self.particles, self.sound_mgr, allow_deal_sfx=False)
+            for btn in self.gameover_buttons:
+                btn.update(dt, mouse_pos)
+            self.overlay_timer += dt
+            self.modal_spring.update(dt)
+
+        elif self.state == GameState.SCOREBOARD:
+            for btn in self.scoreboard_tab_buttons:
+                btn.update(dt, mouse_pos)
+            self.scoreboard_back_btn.update(dt, mouse_pos)
+
     def draw(self):
         self.background.draw_backdrop(self.canvas)
 
-        if self.state == GameState.MENU:
+        if self.state == GameState.NAME_INPUT:
+            self.background.draw_foreground_vines(self.canvas)
+            self._draw_name_input(self.canvas)
+        elif self.state == GameState.MENU:
             self._draw_menu(self.canvas)
             self.background.draw_foreground_vines(self.canvas)
         elif self.state == GameState.PLAYING:
@@ -2891,6 +3239,13 @@ class FruitMemoryDeluxeGame:
             self._draw_playing(self.canvas)
             self.background.draw_foreground_vines(self.canvas)
             self._draw_victory_overlay(self.canvas)
+        elif self.state == GameState.GAME_OVER:
+            self._draw_playing(self.canvas)
+            self.background.draw_foreground_vines(self.canvas)
+            self._draw_gameover_overlay(self.canvas)
+        elif self.state == GameState.SCOREBOARD:
+            self.background.draw_foreground_vines(self.canvas)
+            self._draw_scoreboard(self.canvas)
 
         self.particles.draw(self.canvas)
 
@@ -2914,11 +3269,56 @@ class FruitMemoryDeluxeGame:
 
         pygame.display.flip()
 
+    def _draw_name_input(self, surf: pygame.Surface):
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((10, 24, 16, 135))
+        surf.blit(overlay, (0, 0))
+
+        cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
+        surf.blit(self.name_panel_surf, self.name_panel_surf.get_rect(center=(cx, cy)))
+
+        title_s = render_arcade_text(
+            self.font_title, "WELCOME!", (255, 255, 210), (245, 175, 25), (48, 20, 6), 4, 4
+        )
+        prompt_s = render_arcade_text(
+            self.font_subtitle, "ENTER YOUR PLAYER NAME:", (255, 255, 255), (235, 248, 215), (42, 18, 6), 2, 2
+        )
+        surf.blit(title_s, title_s.get_rect(center=(cx, cy - 125)))
+        surf.blit(prompt_s, prompt_s.get_rect(center=(cx, cy - 58)))
+
+        shake_x = int(math.sin(self.name_input_box_shake * 55.0) * 10.0) if self.name_input_box_shake > 0 else 0
+        box_w, box_h = 380, 64
+        box_rect = pygame.Rect(cx - box_w // 2 + shake_x, cy - 22, box_w, box_h)
+
+        pygame.draw.rect(surf, PALETTE["wood_deep"], box_rect.inflate(8, 8), border_radius=18)
+        pygame.draw.rect(surf, PALETTE["gold_mid"], box_rect.inflate(4, 4), width=3, border_radius=16)
+        pygame.draw.rect(surf, (22, 54, 38), box_rect, border_radius=14)
+        pygame.draw.rect(surf, (12, 32, 22), box_rect, width=3, border_radius=14)
+
+        display_str = self.player_name
+        txt_s = render_arcade_text(
+            self.font_input, display_str, (255, 255, 245), PALETTE["gold_light"], (20, 42, 28), 2, 2
+        )
+        txt_rect = txt_s.get_rect(center=box_rect.center)
+        surf.blit(txt_s, txt_rect)
+
+        if int(self.background.time * 2.2) % 2 == 0:
+            cursor_x = txt_rect.right + 4 if len(display_str) > 0 else box_rect.centerx
+            pygame.draw.line(
+                surf,
+                PALETTE["gold_light"],
+                (cursor_x, box_rect.top + 14),
+                (cursor_x, box_rect.bottom - 14),
+                3,
+            )
+
+        self.name_continue_btn.draw(surf)
+
     def _draw_menu(self, surf: pygame.Surface):
         t = self.background.time
         bob = math.sin(t * 2.4) * 5.0
 
-        plaque_rect = self.menu_plaque_surf.get_rect(center=(SCREEN_WIDTH // 2, int(132 + bob)))
+        plaque_rect = self.menu_plaque_surf.get_rect(center=(SCREEN_WIDTH // 2, int(124 + bob)))
         surf.blit(self.menu_plaque_surf, plaque_rect)
 
         title_surf = render_arcade_text(
@@ -2933,26 +3333,42 @@ class FruitMemoryDeluxeGame:
             2,
             2,
         )
-        surf.blit(title_surf, title_surf.get_rect(center=(SCREEN_WIDTH // 2, int(115 + bob))))
-        surf.blit(sub_surf, sub_surf.get_rect(center=(SCREEN_WIDTH // 2, int(166 + bob))))
+        surf.blit(title_surf, title_surf.get_rect(center=(SCREEN_WIDTH // 2, int(106 + bob))))
+        surf.blit(sub_surf, sub_surf.get_rect(center=(SCREEN_WIDTH // 2, int(156 + bob))))
 
-        spacing = 134
+        spacing = 132
         base_x = SCREEN_WIDTH // 2 - int(1.5 * spacing)
         for i, card_s in enumerate(self.menu_showcase_surfs):
             cx = base_x + i * spacing
-            cy = 298 + int(math.sin(t * 2.8 + i * 0.9) * 10.0)
+            cy = 286 + int(math.sin(t * 2.8 + i * 0.9) * 9.0)
             angle = math.sin(t * 1.9 + i * 1.1) * 6.0
             rot_card = pygame.transform.rotozoom(card_s, angle, 0.90)
             rot_sh = pygame.transform.rotozoom(self.menu_showcase_shadow, angle, 0.90)
             surf.blit(rot_sh, rot_sh.get_rect(center=(cx, cy + 10)))
             surf.blit(rot_card, rot_card.get_rect(center=(cx, cy)))
 
-        surf.blit(self.lbl_grid_select, self.lbl_grid_select.get_rect(center=(SCREEN_WIDTH // 2, 408)))
+        surf.blit(self.lbl_grid_select, self.lbl_grid_select.get_rect(center=(SCREEN_WIDTH // 2, 396)))
         for btn in self.grid_selector_buttons:
             btn.draw(surf)
 
         for btn in self.menu_buttons:
             btn.draw(surf)
+
+    def _get_time_bar_colors(self, ratio: float) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+        ratio = clamp(ratio, 0.0, 1.0)
+        if ratio >= 0.5:
+            local_t = (1.0 - ratio) / 0.5
+            c_main = lerp_color(PALETTE["safe_green"], PALETTE["warn_yellow"], local_t)
+        else:
+            local_t = (0.5 - ratio) / 0.5
+            c_main = lerp_color(PALETTE["warn_yellow"], PALETTE["danger_red"], local_t)
+
+        c_bright = (
+            min(255, c_main[0] + 55),
+            min(255, c_main[1] + 55),
+            min(255, c_main[2] + 55),
+        )
+        return c_main, c_bright
 
     def _draw_playing(self, surf: pygame.Surface):
         if self.board_frame_surf is not None:
@@ -2961,43 +3377,55 @@ class FruitMemoryDeluxeGame:
         banner_rect = self.hud_banner_surf.get_rect(center=(SCREEN_WIDTH // 2, 54))
         surf.blit(self.hud_banner_surf, banner_rect)
 
-        mins = int(self.elapsed_seconds) // 60
-        secs = int(self.elapsed_seconds) % 60
+        rem_ceil = max(0, int(math.ceil(self.remaining_time)))
+        mins = rem_ceil // 60
+        secs = rem_ceil % 60
         time_str = f"{mins:02d}:{secs:02d}"
         score_int = int(round(self.displayed_score))
 
+        time_ratio = self.remaining_time / max(1.0, self.max_time)
+        time_top_c = (255, 195, 195) if time_ratio < 0.25 else (255, 255, 255)
+        time_bot_c = (255, 75, 75) if time_ratio < 0.25 else (255, 232, 165)
+
         cols = [
-            (self.lbl_moves, f"{self.moves}", SCREEN_WIDTH // 2 - 195),
-            (self.lbl_time, time_str, SCREEN_WIDTH // 2),
-            (self.lbl_score, f"{score_int}", SCREEN_WIDTH // 2 + 195),
+            (self.lbl_moves, f"{self.moves}", SCREEN_WIDTH // 2 - 195, (255, 255, 255), (255, 232, 165)),
+            (self.lbl_time, time_str, SCREEN_WIDTH // 2, time_top_c, time_bot_c),
+            (self.lbl_score, f"{score_int}", SCREEN_WIDTH // 2 + 195, (255, 255, 255), (255, 232, 165)),
         ]
-        for lbl_s, val_str, x_pos in cols:
-            val_s = render_arcade_text(
-                self.font_hud_value, val_str, (255, 255, 255), (255, 232, 165), (48, 20, 6), 2, 2
-            )
-            surf.blit(lbl_s, lbl_s.get_rect(center=(x_pos, 31)))
-            surf.blit(val_s, val_s.get_rect(center=(x_pos, 54)))
+        for lbl_s, val_str, x_pos, tc, bc in cols:
+            val_s = render_arcade_text(self.font_hud_value, val_str, tc, bc, (48, 20, 6), 2, 2)
+            surf.blit(lbl_s, lbl_s.get_rect(center=(x_pos, 29)))
+            surf.blit(val_s, val_s.get_rect(center=(x_pos, 51)))
 
         for div_x in (SCREEN_WIDTH // 2 - 100, SCREEN_WIDTH // 2 + 100):
-            pygame.draw.line(surf, PALETTE["wood_deep"], (div_x, 22), (div_x, 66), 3)
-            pygame.draw.line(surf, PALETTE["gold_mid"], (div_x + 2, 22), (div_x + 2, 66), 1)
+            pygame.draw.line(surf, PALETTE["wood_deep"], (div_x, 20), (div_x, 62), 3)
+            pygame.draw.line(surf, PALETTE["gold_mid"], (div_x + 2, 20), (div_x + 2, 62), 1)
 
-        bar_w, bar_h = 236, 12
-        bar_rect = pygame.Rect(SCREEN_WIDTH // 2 - bar_w // 2, 74, bar_w, bar_h)
-        pygame.draw.rect(surf, PALETTE["wood_deep"], bar_rect.inflate(4, 4), border_radius=8)
-        pygame.draw.rect(surf, (32, 16, 8), bar_rect, border_radius=6)
-        if self.fever_meter > 0.01:
-            fill_w = max(8, int(bar_w * self.fever_meter))
-            pulse_c = (255, int(185 + 65 * math.sin(self.background.time * 10.0)), 45)
+        bar_w, bar_h = 330, 14
+        bar_shake_x = int(math.sin(self.time_bar_shake * 58.0) * 7.0) if self.time_bar_shake > 0 else 0
+        bar_rect = pygame.Rect(SCREEN_WIDTH // 2 - bar_w // 2 + bar_shake_x, 72, bar_w, bar_h)
+
+        pygame.draw.rect(surf, PALETTE["wood_deep"], bar_rect.inflate(6, 6), border_radius=9)
+        pygame.draw.rect(surf, (24, 14, 8), bar_rect, border_radius=7)
+
+        if time_ratio > 0.005:
+            fill_w = max(8, int(bar_w * clamp(time_ratio, 0.0, 1.0)))
+            c_main, c_bright = self._get_time_bar_colors(time_ratio)
             fill_grad = create_linear_gradient_rect(
                 fill_w,
                 bar_h,
-                [(0.0, (44, 198, 122)), (0.5, pulse_c), (1.0, (255, 248, 150))],
-                border_radius=6,
-                vertical=False,
+                [(0.0, c_bright), (0.55, c_main), (1.0, lerp_color(c_main, (20, 10, 5), 0.35))],
+                border_radius=7,
+                vertical=True,
             )
             surf.blit(fill_grad, bar_rect.topleft)
-        pygame.draw.rect(surf, PALETTE["gold_mid"], bar_rect.inflate(2, 2), width=2, border_radius=7)
+
+        if time_ratio < 0.25:
+            pulse = 0.5 + 0.5 * math.sin(self.background.time * 12.0)
+            border_c = lerp_color(PALETTE["gold_mid"], PALETTE["danger_red"], pulse)
+        else:
+            border_c = PALETTE["gold_mid"]
+        pygame.draw.rect(surf, border_c, bar_rect.inflate(2, 2), width=2, border_radius=8)
 
         for btn in self.hud_buttons:
             btn.draw(surf)
@@ -3022,20 +3450,20 @@ class FruitMemoryDeluxeGame:
 
     def _draw_victory_overlay(self, surf: pygame.Surface):
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        fade_alpha = int(min(185.0, self.victory_timer * 440.0))
+        fade_alpha = int(min(185.0, self.overlay_timer * 440.0))
         overlay.fill((10, 22, 16, fade_alpha))
         surf.blit(overlay, (0, 0))
 
-        scale = max(0.05, self.victory_panel_spring.value)
-        cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 8
+        scale = max(0.05, self.modal_spring.value)
+        cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 10
 
         if abs(scale - 1.0) > 0.008:
-            pw = max(1, int(self.victory_panel_surf.get_width() * scale))
-            ph = max(1, int(self.victory_panel_surf.get_height() * scale))
-            scaled_panel = pygame.transform.smoothscale(self.victory_panel_surf, (pw, ph))
+            pw = max(1, int(self.modal_panel_surf.get_width() * scale))
+            ph = max(1, int(self.modal_panel_surf.get_height() * scale))
+            scaled_panel = pygame.transform.smoothscale(self.modal_panel_surf, (pw, ph))
             surf.blit(scaled_panel, scaled_panel.get_rect(center=(cx, cy)))
         else:
-            surf.blit(self.victory_panel_surf, self.victory_panel_surf.get_rect(center=(cx, cy)))
+            surf.blit(self.modal_panel_surf, self.modal_panel_surf.get_rect(center=(cx, cy)))
 
         if scale < 0.65:
             return
@@ -3043,9 +3471,9 @@ class FruitMemoryDeluxeGame:
         header_surf = render_arcade_text(
             self.font_title, "VICTORY!", (255, 255, 205), (245, 170, 20), (52, 20, 6), 4, 4
         )
-        surf.blit(header_surf, header_surf.get_rect(center=(cx, cy - 156)))
+        surf.blit(header_surf, header_surf.get_rect(center=(cx, cy - 165)))
 
-        star_positions = [(cx - 102, cy - 68), (cx, cy - 82), (cx + 102, cy - 68)]
+        star_positions = [(cx - 102, cy - 78), (cx, cy - 92), (cx + 102, cy - 78)]
         for i in range(3):
             sx, sy = star_positions[i]
             surf.blit(self.star_empty_surf, self.star_empty_surf.get_rect(center=(sx, sy)))
@@ -3060,18 +3488,129 @@ class FruitMemoryDeluxeGame:
         mins = int(self.elapsed_seconds) // 60
         secs = int(self.elapsed_seconds) % 60
         stats = [
+            f"CHAMPION:      {self.player_name} ({self.grid_dim}x{self.grid_dim})",
             f"FINAL SCORE:   {self.score}",
-            f"TOTAL MOVES:   {self.moves}  ({self.grid_dim}x{self.grid_dim})",
-            f"CLEAR TIME:    {mins:02d}:{secs:02d}",
+            f"CLEAR TIME:    {mins:02d}:{secs:02d}  (MOVES: {self.moves})",
         ]
         for idx, line in enumerate(stats):
             st_surf = render_arcade_text(
                 self.font_subtitle, line, (255, 255, 255), (255, 225, 155), (48, 20, 6), 2, 2
             )
-            surf.blit(st_surf, st_surf.get_rect(center=(cx, cy + 14 + idx * 38)))
+            surf.blit(st_surf, st_surf.get_rect(center=(cx, cy + 4 + idx * 36)))
 
         for btn in self.victory_buttons:
             btn.draw(surf)
+
+    def _draw_gameover_overlay(self, surf: pygame.Surface):
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        fade_alpha = int(min(195.0, self.overlay_timer * 440.0))
+        overlay.fill((28, 10, 12, fade_alpha))
+        surf.blit(overlay, (0, 0))
+
+        scale = max(0.05, self.modal_spring.value)
+        cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 6
+
+        if abs(scale - 1.0) > 0.008:
+            pw = max(1, int(self.modal_panel_surf.get_width() * scale))
+            ph = max(1, int(self.modal_panel_surf.get_height() * scale))
+            scaled_panel = pygame.transform.smoothscale(self.modal_panel_surf, (pw, ph))
+            surf.blit(scaled_panel, scaled_panel.get_rect(center=(cx, cy)))
+        else:
+            surf.blit(self.modal_panel_surf, self.modal_panel_surf.get_rect(center=(cx, cy)))
+
+        if scale < 0.65:
+            return
+
+        header_surf = render_arcade_text(
+            self.font_title, "TIME'S UP!", (255, 215, 215), (235, 45, 58), (48, 12, 12), 4, 4
+        )
+        surf.blit(header_surf, header_surf.get_rect(center=(cx, cy - 145)))
+
+        info_lines = [
+            f"PLAYER:         {self.player_name}",
+            f"PAIRS FOUND:    {self.matched_pairs} / {self.total_pairs}",
+            f"SCORE EARNED:   {self.score}",
+        ]
+        for idx, line in enumerate(info_lines):
+            st_surf = render_arcade_text(
+                self.font_subtitle, line, (255, 255, 255), (255, 215, 175), (48, 20, 6), 2, 2
+            )
+            surf.blit(st_surf, st_surf.get_rect(center=(cx, cy - 35 + idx * 42)))
+
+        for btn in self.gameover_buttons:
+            btn.draw(surf)
+
+    def _draw_scoreboard(self, surf: pygame.Surface):
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((10, 24, 16, 145))
+        surf.blit(overlay, (0, 0))
+
+        cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 4
+        surf.blit(self.scoreboard_panel_surf, self.scoreboard_panel_surf.get_rect(center=(cx, cy)))
+
+        title_s = render_arcade_text(
+            self.font_title, "HALL OF CHAMPIONS", (255, 252, 205), (245, 172, 22), (48, 20, 6), 4, 4
+        )
+        surf.blit(title_s, title_s.get_rect(center=(cx, 134)))
+
+        for btn in self.scoreboard_tab_buttons:
+            btn.draw(surf)
+
+        table_rect = pygame.Rect(cx - 310, 244, 620, 332)
+        pygame.draw.rect(surf, (16, 44, 30, 195), table_rect, border_radius=16)
+        pygame.draw.rect(surf, PALETTE["gold_mid"], table_rect, width=2, border_radius=16)
+
+        headers = [("RANK", cx - 255), ("PLAYER", cx - 125), ("SCORE", cx + 35), ("TIME", cx + 155), ("MOVES", cx + 255)]
+        for h_text, hx in headers:
+            hs = render_arcade_text(
+                self.font_hud_label, h_text, PALETTE["gold_shine"], PALETTE["gold_mid"], (32, 14, 4), 2, 1
+            )
+            surf.blit(hs, hs.get_rect(center=(hx, 266)))
+
+        pygame.draw.line(surf, PALETTE["gold_mid"], (table_rect.left + 16, 284), (table_rect.right - 16, 284), 2)
+
+        records = self.leaderboard.get_records(self.scoreboard_filter_dim)
+        if not records:
+            empty_s = render_arcade_text(
+                self.font_subtitle, "NO RECORDS YET FOR THIS BOARD SIZE!", (255, 255, 255), PALETTE["cream_dark"], (32, 14, 6), 2, 2
+            )
+            surf.blit(empty_s, empty_s.get_rect(center=table_rect.center))
+        else:
+            for idx, rec in enumerate(records[:7]):
+                ry = 308 + idx * 38
+                if idx % 2 == 0:
+                    row_r = pygame.Rect(table_rect.left + 10, ry - 16, table_rect.width - 20, 32)
+                    pygame.draw.rect(surf, (255, 255, 255, 18), row_r, border_radius=8)
+
+                badge_bx = cx - 255
+                if idx == 0:
+                    draw_radial_sphere(surf, (badge_bx, ry), 13, PALETTE["gold_shadow"], PALETTE["gold_mid"], PALETTE["gold_shine"])
+                elif idx == 1:
+                    draw_radial_sphere(surf, (badge_bx, ry), 13, PALETTE["silver_dark"], PALETTE["silver_mid"], PALETTE["silver_light"])
+                elif idx == 2:
+                    draw_radial_sphere(surf, (badge_bx, ry), 13, PALETTE["bronze_dark"], PALETTE["bronze_mid"], PALETTE["bronze_light"])
+
+                rank_s = render_arcade_text(self.font_table, f"#{idx + 1}", (255, 255, 255), PALETTE["cream"], (32, 14, 4), 2, 1)
+                surf.blit(rank_s, rank_s.get_rect(center=(badge_bx, ry)))
+
+                t_sec = float(rec.get("time", 0.0))
+                mins = int(t_sec) // 60
+                secs = t_sec - mins * 60
+                time_fmt = f"{mins:02d}:{secs:04.1f}"
+
+                row_cols = [
+                    (str(rec.get("name", "PLAYER")), cx - 125),
+                    (str(rec.get("score", 0)), cx + 35),
+                    (time_fmt, cx + 155),
+                    (str(rec.get("moves", 0)), cx + 255),
+                ]
+                top_c = PALETTE["gold_shine"] if idx == 0 else (255, 255, 255)
+                bot_c = PALETTE["gold_mid"] if idx == 0 else (225, 242, 225)
+                for val_txt, vx in row_cols:
+                    vs = render_arcade_text(self.font_table, val_txt, top_c, bot_c, (28, 14, 6), 2, 1)
+                    surf.blit(vs, vs.get_rect(center=(vx, ry)))
+
+        self.scoreboard_back_btn.draw(surf)
 
     def run(self):
         while self.running:

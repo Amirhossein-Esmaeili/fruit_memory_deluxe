@@ -1,0 +1,58 @@
+{
+  "4x4": [
+    {
+      "name": "ARIA",
+      "score": 2150,
+      "time": 18.4,
+      "moves": 10
+    },
+    {
+      "name": "LEO",
+      "score": 1780,
+      "time": 24.2,
+      "moves": 13
+    },
+    {
+      "name": "NOVA",
+      "score": 1420,
+      "time": 31.0,
+      "moves": 16
+    },
+    {
+      "name": "ALI",
+      "score": 1300,
+      "time": 55.3,
+      "moves": 23
+    }
+  ],
+  "6x6": [
+    {
+      "name": "KAI",
+      "score": 5400,
+      "time": 52.5,
+      "moves": 28
+    },
+    {
+      "name": "MILA",
+      "score": 4620,
+      "time": 68.1,
+      "moves": 34
+    }
+  ],
+  "8x8": [
+    {
+      "name": "ZANE",
+      "score": 10800,
+      "time": 124.0,
+      "moves": 58
+    }
+  ],
+  "10x10": [
+    {
+      "name": "ORION",
+      "score": 18500,
+      "time": 240.5,
+      "moves": 96
+    }
+  ]
+}
